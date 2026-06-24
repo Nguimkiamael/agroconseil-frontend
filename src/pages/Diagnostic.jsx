@@ -1,7 +1,7 @@
 // src/pages/Dashboard.jsx — AgroConseil Pro v3
 // Design : tableau de bord agronome premium
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,

@@ -59,10 +59,6 @@ export default function MonEspace() {
     setTimeout(() => setMsgReseau(''), 4000);
   };
 
-  const deconnexion = () => {
-    localStorage.clear();
-    navigate('/connexion');
-  };
 
   if (loading) return <div style={styles.loading}>Chargement...</div>;
 
