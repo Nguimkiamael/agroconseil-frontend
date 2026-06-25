@@ -1,492 +1,679 @@
-// src/pages/Dashboard.jsx — AgroConseil Pro v3
-// Design : tableau de bord agronome premium
+// src/pages/Diagnostic.jsx
+// AgroConseil Pro — Page de diagnostic v2
+// Améliorations : loader par étapes, badge RAG, cohérence image+texte,
+//                 nom scientifique, drag & drop, cultures enrichies
 
-import { useState, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
-} from 'recharts';
-import api from '../services/api';
+import { diagnosticAPI, rapportsAPI } from '../services/api';
 import { Header } from './Parcelles';
 
-// ── Palette ────────────────────────────────────────────────
-const C = {
-  forest:   '#0F3D24',
-  sage:     '#2D6A4F',
-  mint:     '#52B788',
-  cream:    '#FAFAF7',
-  sand:     '#F1EDE4',
-  amber:    '#D97706',
-  amberBg:  '#FEF3C7',
-  red:      '#DC2626',
-  redBg:    '#FEE2E2',
-  blue:     '#2563EB',
-  blueBg:   '#EFF6FF',
-  slate:    '#374151',
-  muted:    '#6B7280',
-  border:   '#E5E7EB',
-  white:    '#FFFFFF',
-};
+const CULTURES = [
+  'arachide', 'café', 'cacao', 'haricot', 'igname',
+  'maïs', 'manioc', 'palmier à huile', 'plantain',
+  'riz', 'sorgho', 'tomate',
+];
 
-const PIE_COLORS = ['#0F3D24','#2D6A4F','#52B788','#D97706','#2563EB','#8B5CF6'];
+const REGIONS = [
+  'Adamaoua', 'Centre', 'Est', 'Extrême-Nord',
+  'Littoral', 'Nord', 'Nord-Ouest', 'Ouest', 'Sud', 'Sud-Ouest',
+];
 
-// ── Composant : Score animé ────────────────────────────────
-function ScoreAnneau({ score, size = 120 }) {
-  const r = 44;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - (score / 100) * circ;
-  const color = score >= 75 ? C.mint : score >= 50 ? C.amber : C.red;
+// Étapes affichées pendant le chargement (rassure l'utilisateur)
+const ETAPES_CHARGEMENT = [
+  { id: 1, label: 'Agent Vision — analyse de l\'image...', duree: 4000 },
+  { id: 2, label: 'Recherche dans la base IRAD (RAG)...', duree: 3000 },
+  { id: 3, label: 'Agent Diagnostic — identification...', duree: 4000 },
+  { id: 4, label: 'Agent Agronome — plan de traitement...', duree: 4000 },
+  { id: 5, label: 'Agent Planificateur — calendrier 4 semaines...', duree: 3000 },
+  { id: 6, label: 'Agent Rapporteur — génération de la synthèse...', duree: 3000 },
+];
 
-  return (
-    <svg width={size} height={size} viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r={r} fill="none" stroke="#E5E7EB" strokeWidth="8" />
-      <circle
-        cx="50" cy="50" r={r} fill="none"
-        stroke={color} strokeWidth="8"
-        strokeDasharray={circ}
-        strokeDashoffset={offset}
-        strokeLinecap="round"
-        transform="rotate(-90 50 50)"
-        style={{ transition: 'stroke-dashoffset 1s ease' }}
-      />
-      <text x="50" y="46" textAnchor="middle" fontSize="18" fontWeight="800" fill={C.slate}>{score}%</text>
-      <text x="50" y="60" textAnchor="middle" fontSize="9" fill={C.muted}>confiance</text>
-    </svg>
-  );
-}
-
-// ── Composant : KPI Card ───────────────────────────────────
-function KpiCard({ icone, valeur, label, sous, couleur, bg }) {
-  return (
-    <div style={{
-      background: C.white,
-      borderRadius: 14,
-      padding: '20px 22px',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)',
-      borderTop: `3px solid ${couleur}`,
-      display: 'flex', flexDirection: 'column', gap: 6,
-      transition: 'transform 0.15s, box-shadow 0.15s',
-      cursor: 'default',
-    }}
-      onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.10)'; }}
-      onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)'; }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ background: bg, borderRadius: 10, padding: '8px 10px', fontSize: 20 }}>{icone}</div>
-      </div>
-      <div style={{ fontSize: 30, fontWeight: 900, color: C.slate, lineHeight: 1, marginTop: 4 }}>{valeur}</div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-      {sous && <div style={{ fontSize: 11, color: couleur, fontWeight: 600, marginTop: 2 }}>{sous}</div>}
-    </div>
-  );
-}
-
-// ── Tooltip custom ─────────────────────────────────────────
-const TooltipCustom = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 14px', fontSize: 12, boxShadow: '0 4px 12px rgba(0,0,0,0.10)' }}>
-      <div style={{ color: C.muted, marginBottom: 4 }}>{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} style={{ color: p.color || C.forest, fontWeight: 700 }}>
-          {p.value} {p.name === 'total' ? 'diagnostic(s)' : p.name}
-        </div>
-      ))}
-    </div>
-  );
-};
-
-// ── Bandeau santé réseau ───────────────────────────────────
-function BandeauSante({ stats }) {
-  if (!stats) return null;
-  const score = stats.resume.score_moyen || 0;
-  const escalade = stats.resume.taux_escalade || 0;
-  const etat = score >= 75 ? { label: 'Réseau en bonne santé', color: C.mint, bg: '#F0FDF4' }
-             : score >= 50 ? { label: 'Réseau à surveiller',   color: C.amber, bg: '#FFFBEB' }
-             :               { label: 'Réseau nécessite attention', color: C.red, bg: '#FFF5F5' };
-
-  return (
-    <div style={{
-      background: etat.bg,
-      border: `1px solid ${etat.color}30`,
-      borderRadius: 12,
-      padding: '16px 24px',
-      marginBottom: 24,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 20,
-    }}>
-      <ScoreAnneau score={score} size={90} />
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: etat.color, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
-          {etat.label}
-        </div>
-        <div style={{ fontSize: 22, fontWeight: 900, color: C.slate }}>
-          {stats.resume.total_consultations} diagnostics réalisés
-        </div>
-        <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
-          {stats.resume.agriculteurs_uniques} agriculteur(s) suivi(s) · {escalade}% de cas escaladés vers expert
-        </div>
-      </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Fiabilité moyenne</div>
-        <div style={{ fontSize: 36, fontWeight: 900, color: etat.color }}>{score}%</div>
-      </div>
-    </div>
-  );
-}
-
-// ── Ligne consultation ─────────────────────────────────────
-function LigneConsultation({ c, index }) {
-  const [hover, setHover] = useState(false);
-  const score = c.score_confiance;
-  const scoreColor = score >= 80 ? C.mint : score >= 50 ? C.amber : C.red;
-  const scoreBg    = score >= 80 ? '#F0FDF4' : score >= 50 ? C.amberBg : C.redBg;
-
-  return (
-    <tr
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{ background: hover ? C.cream : (index % 2 === 0 ? C.white : '#FAFAFA'), transition: 'background 0.1s' }}
-    >
-      <td style={S.td}>
-        <div style={{ fontWeight: 600, color: C.slate, fontSize: 12 }}>
-          {c.utilisateur__first_name || c.utilisateur__username || '—'}
-        </div>
-      </td>
-      <td style={S.td}>
-        <span style={{ background: '#F0FDF4', color: C.sage, padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>
-          {c.culture}
-        </span>
-      </td>
-      <td style={{ ...S.td, color: C.muted, fontSize: 11 }}>{c.region || '—'}</td>
-      <td style={{ ...S.td, maxWidth: 180 }}>
-        <div style={{ fontSize: 12, color: C.slate, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {c.maladie_detectee || <span style={{ color: C.muted, fontStyle: 'italic' }}>Non identifié</span>}
-        </div>
-      </td>
-      <td style={S.td}>
-        {score > 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 48, height: 4, background: '#E5E7EB', borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{ width: `${score}%`, height: '100%', background: scoreColor, borderRadius: 2, transition: 'width 0.5s' }} />
-            </div>
-            <span style={{ background: scoreBg, color: scoreColor, padding: '2px 7px', borderRadius: 6, fontSize: 11, fontWeight: 700 }}>
-              {score}%
-            </span>
-          </div>
-        ) : <span style={{ color: C.muted, fontSize: 11 }}>—</span>}
-      </td>
-      <td style={S.td}>
-        <span style={{
-          padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 700,
-          textTransform: 'uppercase', letterSpacing: '0.05em',
-          background: c.statut === 'complete' ? '#F0FDF4' : C.amberBg,
-          color:      c.statut === 'complete' ? C.sage    : C.amber,
-        }}>
-          {c.statut === 'complete' ? '✓ Complété' : '⚠ Escaladé'}
-        </span>
-      </td>
-      <td style={{ ...S.td, color: C.muted, fontSize: 11 }}>
-        {new Date(c.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })}
-      </td>
-    </tr>
-  );
-}
-
-// ── PAGE PRINCIPALE ────────────────────────────────────────
-export default function Dashboard() {
+// ════════════════════════════════════════════════════════════
+// PAGE PRINCIPALE
+// ════════════════════════════════════════════════════════════
+export default function Diagnostic() {
   const navigate    = useNavigate();
   const utilisateur = JSON.parse(localStorage.getItem('utilisateur') || '{}');
+  const dropRef     = useRef(null);
 
-  const [stats,         setStats]         = useState(null);
-  const [consultations, setConsultations] = useState([]);
-  const [loading,       setLoading]       = useState(true);
-  const [erreur,        setErreur]        = useState('');
-  const [onglet,        setOnglet]        = useState('apercu'); // apercu | consultations
+  const [form,      setForm]      = useState({ culture: '', region: '', description: '' });
+  const [image,     setImage]     = useState(null);
+  const [preview,   setPreview]   = useState(null);
+  const [dragOver,  setDragOver]  = useState(false);
+  const [loading,   setLoading]   = useState(false);
+  const [etapeIdx,  setEtapeIdx]  = useState(0);
+  const [resultat,  setResultat]  = useState(null);
+  const [erreur,    setErreur]    = useState('');
 
-  useEffect(() => { chargerDonnees(); }, []);
+  // ── Gestion image ────────────────────────────────────────
+  const appliquerImage = (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    setImage(file);
+    setPreview(URL.createObjectURL(file));
+  };
 
-  const chargerDonnees = async () => {
+  const handleImage = (e) => appliquerImage(e.target.files[0]);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    appliquerImage(e.dataTransfer.files[0]);
+  };
+
+  // ── Loader progressif ────────────────────────────────────
+  const demarrerLoader = () => {
+    setEtapeIdx(0);
+    let idx = 0;
+    const avancer = () => {
+      if (idx < ETAPES_CHARGEMENT.length - 1) {
+        idx++;
+        setEtapeIdx(idx);
+        setTimeout(avancer, ETAPES_CHARGEMENT[idx].duree);
+      }
+    };
+    setTimeout(avancer, ETAPES_CHARGEMENT[0].duree);
+  };
+
+  // ── Soumission ───────────────────────────────────────────
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setErreur('');
+    setResultat(null);
+
+    if (!form.description.trim()) {
+  setErreur('⚠️ La description des symptômes est obligatoire. Décrivez ce que vous observez : couleur des feuilles, taches, déformation, parties touchées, depuis combien de temps.');
+  return;
+}
+if (form.description.trim().length < 20) {
+  setErreur('⚠️ Description trop courte. Soyez plus précis pour un meilleur diagnostic.');
+  return;
+}
+    if (!form.culture || !form.region) {
+      setErreur('Sélectionnez la culture et la région.');
+      return;
+    }
+
+    setLoading(true);
+    demarrerLoader();
+
+    const formData = new FormData();
+    formData.append('culture',     form.culture);
+    formData.append('region',      form.region);
+    formData.append('description', form.description);
+    if (image) formData.append('image', image);
+
     try {
-      const [statsRes, consultRes] = await Promise.all([
-        api.get('/diagnostic/mes-dashboard/'),
-        api.get('/diagnostic/mes-consultations/'),
-      ]);
-      setStats(statsRes.data);
-      setConsultations(consultRes.data);
-    } catch {
-      setErreur('Impossible de charger les statistiques. Vérifiez votre connexion.');
+      const res = await diagnosticAPI.lancer(formData);
+      setResultat(res.data);
+    } catch (err) {
+      setErreur(err.response?.data?.erreur || 'Erreur lors du diagnostic. Réessayez.');
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.cream, flexDirection: 'column', gap: 16 }}>
-      <div style={{ width: 40, height: 40, border: `3px solid ${C.border}`, borderTop: `3px solid ${C.sage}`, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      <span style={{ color: C.muted, fontSize: 13 }}>Chargement du tableau de bord…</span>
-    </div>
-  );
+  // ── Téléchargement PDF ───────────────────────────────────
+  const telechargerPDF = async () => {
+    try {
+      const res  = await rapportsAPI.telecharger(resultat.consultation_id);
+      const url  = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href  = url;
+      link.setAttribute('download', `AgroConseil_${form.culture}_${Date.now()}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch {
+      alert('Erreur lors du téléchargement du PDF.');
+    }
+  };
 
-  if (erreur) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.cream }}>
-      <div style={{ background: C.white, borderRadius: 12, padding: 32, textAlign: 'center', maxWidth: 360 }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>⚠️</div>
-        <div style={{ color: C.slate, fontSize: 14, marginBottom: 16 }}>{erreur}</div>
-        <button onClick={chargerDonnees} style={{ background: C.sage, color: C.white, border: 'none', borderRadius: 8, padding: '10px 20px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-          Réessayer
-        </button>
-      </div>
-    </div>
-  );
+  const nouveauDiagnostic = () => {
+    setResultat(null);
+    setForm({ culture: '', region: '', description: '' });
+    setImage(null);
+    setPreview(null);
+    setEtapeIdx(0);
+  };
 
+  const deconnexion = () => {
+    localStorage.clear();
+    navigate('/connexion');
+  };
+
+  // ── Rendu ────────────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', background: C.cream, fontFamily: "'Inter', 'Segoe UI', Arial, sans-serif" }}>
-      <style>{`
-        * { box-sizing: border-box; }
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
-      `}</style>
+    <div style={styles.page}>
+      <Header navigate={navigate} utilisateur={utilisateur} onDeconnexion={deconnexion} />
 
-      <Header navigate={navigate} utilisateur={utilisateur} />
+      <div style={styles.container}>
 
-      <div style={{ maxWidth: 1180, margin: '0 auto', padding: '28px 20px' }}>
-
-        {/* ── Titre + actions ── */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20 }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.mint, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>
-              AgroConseil Pro
-            </div>
-            <h1 style={{ fontSize: 24, fontWeight: 900, color: C.forest, margin: 0 }}>
-              Tableau de bord
-            </h1>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
-              Vue d'ensemble de votre réseau d'agriculteurs
-            </div>
-          </div>
-          <button
-            onClick={() => navigate('/diagnostic')}
-            style={{ background: C.sage, color: C.white, border: 'none', borderRadius: 10, padding: '10px 20px', cursor: 'pointer', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}
-          >
-            🔬 Nouveau diagnostic
-          </button>
-        </div>
-
-        {/* ── Bandeau santé réseau ── */}
-        <BandeauSante stats={stats} />
-
-        {/* ── KPI Cards ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 24 }}>
-          <KpiCard icone="📋" valeur={stats.resume.total_consultations} label="Diagnostics" sous="Depuis le début" couleur={C.sage} bg="#F0FDF4" />
-          <KpiCard icone="👨‍🌾" valeur={stats.resume.agriculteurs_uniques} label="Agriculteurs" sous="Réseau actif" couleur={C.blue} bg={C.blueBg} />
-          <KpiCard icone="✅" valeur={`${stats.resume.score_moyen}%`} label="Score moyen" sous="Fiabilité IA" couleur={C.mint} bg="#F0FDF4" />
-          <KpiCard icone="⚠️" valeur={`${stats.resume.taux_escalade}%`} label="Taux escalade" sous="Cas complexes" couleur={C.amber} bg={C.amberBg} />
-        </div>
-
-        {/* ── Onglets ── */}
-        <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: C.white, padding: 4, borderRadius: 10, width: 'fit-content', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-          {[
-            { id: 'apercu',        label: '📊 Aperçu' },
-            { id: 'consultations', label: '📋 Consultations' },
-          ].map(o => (
-            <button
-              key={o.id}
-              onClick={() => setOnglet(o.id)}
-              style={{
-                background: onglet === o.id ? C.forest : 'transparent',
-                color:      onglet === o.id ? C.white  : C.muted,
-                border: 'none', borderRadius: 7, padding: '7px 18px',
-                cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                transition: 'all 0.15s',
-              }}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-
-        {/* ── ONGLET APERÇU ── */}
-        {onglet === 'apercu' && (
-          <div>
-            {/* Évolution */}
-            <div style={S.card}>
-              <div style={S.cardHeader}>
-                <div style={S.cardTitre}>📈 Diagnostics des 30 derniers jours</div>
-                <div style={{ fontSize: 11, color: C.muted }}>Activité quotidienne</div>
-              </div>
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={stats.evolution_30j} margin={{ left: -10, right: 10, top: 5, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                  <XAxis dataKey="date" fontSize={10} tick={{ fill: C.muted }} axisLine={false} tickLine={false} />
-                  <YAxis fontSize={10} tick={{ fill: C.muted }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<TooltipCustom />} />
-                  <Line
-                    type="monotone" dataKey="total" stroke={C.sage} strokeWidth={2.5}
-                    dot={{ r: 3, fill: C.sage, strokeWidth: 0 }}
-                    activeDot={{ r: 5, fill: C.forest }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-              {/* Par culture */}
-              <div style={S.card}>
-                <div style={S.cardHeader}>
-                  <div style={S.cardTitre}>🌾 Cultures diagnostiquées</div>
+        {/* ═══ LOADER ═══ */}
+        {loading && (
+          <div style={styles.loaderCard}>
+            <div style={styles.loaderSpinner}>🌿</div>
+            <h3 style={styles.loaderTitre}>Analyse en cours...</h3>
+            <p style={styles.loaderSousTitre}>Nos 6 agents IA travaillent sur votre cas</p>
+            <div style={styles.etapesContainer}>
+              {ETAPES_CHARGEMENT.map((etape, i) => (
+                <div key={etape.id} style={{
+                  ...styles.etapeLigne,
+                  color: i < etapeIdx ? '#16a34a' : i === etapeIdx ? '#1B6B3A' : '#9ca3af',
+                  fontWeight: i === etapeIdx ? 700 : 400,
+                }}>
+                  <span style={styles.etapePuce}>
+                    {i < etapeIdx ? '✓' : i === etapeIdx ? '⟳' : '○'}
+                  </span>
+                  {etape.label}
                 </div>
-                {stats.par_culture?.length > 0 ? (
-                  <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-                    <ResponsiveContainer width="50%" height={180}>
-                      <PieChart>
-                        <Pie data={stats.par_culture} dataKey="total" nameKey="culture" cx="50%" cy="50%" outerRadius={70} innerRadius={35}>
-                          {stats.par_culture.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                        </Pie>
-                        <Tooltip content={<TooltipCustom />} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {stats.par_culture.slice(0, 5).map((c, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div style={{ width: 8, height: 8, borderRadius: '50%', background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0 }} />
-                          <span style={{ fontSize: 11, color: C.slate, flex: 1 }}>{c.culture}</span>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: C.muted }}>{c.total}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : <Vide />}
-              </div>
-
-              {/* Par région */}
-              <div style={S.card}>
-                <div style={S.cardHeader}>
-                  <div style={S.cardTitre}>🌍 Régions actives</div>
-                </div>
-                {stats.par_region?.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={180}>
-                    <BarChart data={stats.par_region} margin={{ left: -20, right: 5, top: 5, bottom: 30 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-                      <XAxis dataKey="region" fontSize={9} angle={-35} textAnchor="end" tick={{ fill: C.muted }} axisLine={false} tickLine={false} />
-                      <YAxis fontSize={10} tick={{ fill: C.muted }} axisLine={false} tickLine={false} />
-                      <Tooltip content={<TooltipCustom />} />
-                      <Bar dataKey="total" fill={C.sage} radius={[4, 4, 0, 0]}>
-                        {stats.par_region.map((_, i) => (
-                          <Cell key={i} fill={i === 0 ? C.forest : C.mint} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : <Vide />}
-              </div>
+              ))}
             </div>
-
-            {/* Maladies fréquentes */}
-            <div style={S.card}>
-              <div style={S.cardHeader}>
-                <div style={S.cardTitre}>🦠 Maladies les plus fréquentes</div>
-                <div style={{ fontSize: 11, color: C.muted }}>Sur l'ensemble des diagnostics confirmés</div>
-              </div>
-              {stats.maladies_frequentes?.length === 0 ? <Vide texte="Les maladies apparaîtront ici au fil des diagnostics." /> : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {stats.maladies_frequentes.map((m, i) => {
-                    const max = stats.maladies_frequentes[0]?.total || 1;
-                    const pct = Math.round((m.total / max) * 100);
-                    return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <div style={{ width: 22, height: 22, borderRadius: '50%', background: i === 0 ? C.forest : C.sand, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 800, color: i === 0 ? C.white : C.muted, flexShrink: 0 }}>
-                          {i + 1}
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: C.slate }}>{m.maladie_detectee}</span>
-                            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>{m.total} cas</span>
-                          </div>
-                          <div style={{ height: 4, background: C.sand, borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: `${pct}%`, height: '100%', background: i === 0 ? C.forest : C.mint, borderRadius: 2, transition: 'width 0.8s ease' }} />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+            <div style={styles.loaderBarre}>
+              <div style={{
+                ...styles.loaderBarreInterne,
+                width: `${((etapeIdx + 1) / ETAPES_CHARGEMENT.length) * 100}%`,
+              }} />
             </div>
           </div>
         )}
 
-        {/* ── ONGLET CONSULTATIONS ── */}
-        {onglet === 'consultations' && (
-          <div style={S.card}>
-            <div style={{ ...S.cardHeader, marginBottom: 16 }}>
-              <div style={S.cardTitre}>📋 Consultations récentes</div>
-              <div style={{ fontSize: 11, color: C.muted }}>{consultations.length} entrée(s)</div>
-            </div>
-            {consultations.length === 0 ? (
-              <Vide texte="Aucune consultation enregistrée pour le moment." />
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ background: C.cream }}>
-                      {['Agriculteur', 'Culture', 'Région', 'Diagnostic', 'Score', 'Statut', 'Date'].map(h => (
-                        <th key={h} style={S.th}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {consultations.slice(0, 20).map((c, i) => (
-                      <LigneConsultation key={c.id} c={c} index={i} />
+        {/* ═══ FORMULAIRE ═══ */}
+        {!loading && !resultat && (
+          <div style={styles.card}>
+            <h2 style={styles.titre}>🔍 Nouveau diagnostic</h2>
+            <p style={styles.sousTitre}>
+              Décrivez le problème de votre culture et/ou ajoutez une photo.
+              Notre système multi-agents analysera et identifiera la maladie.
+            </p>
+
+            <form onSubmit={handleSubmit}>
+
+              {/* Culture + Région */}
+              <div style={styles.row}>
+                <div style={{ flex: 1 }}>
+                  <label style={styles.label}>Culture *</label>
+                  <select
+                    style={styles.input}
+                    value={form.culture}
+                    onChange={e => setForm({ ...form, culture: e.target.value })}
+                  >
+                    <option value="">Sélectionnez...</option>
+                    {CULTURES.map(c => (
+                      <option key={c} value={c}>
+                        {c.charAt(0).toUpperCase() + c.slice(1)}
+                      </option>
                     ))}
-                  </tbody>
-                </table>
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={styles.label}>Région *</label>
+                  <select
+                    style={styles.input}
+                    value={form.region}
+                    onChange={e => setForm({ ...form, region: e.target.value })}
+                  >
+                    <option value="">Sélectionnez...</option>
+                    {REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Description */}
+              <label style={styles.label}>Description du problème</label>
+              <textarea
+                style={styles.textarea}
+                rows={4}
+                placeholder="Ex : Les feuilles ont des trous irréguliers et je vois de la sciure dans le cornet du maïs depuis 3 jours..."
+                value={form.description}
+                onChange={e => setForm({ ...form, description: e.target.value })}
+              />
+
+              {/* Zone drag & drop image */}
+              <label style={styles.label}>📸 Photo de la culture (optionnel)</label>
+              <div
+                ref={dropRef}
+                style={{ ...styles.dropZone, borderColor: dragOver ? '#1B6B3A' : '#d1d5db', background: dragOver ? '#f0fdf4' : '#fafafa' }}
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
+                onClick={() => dropRef.current.querySelector('input').click()}
+              >
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleImage}
+                  style={{ display: 'none' }}
+                />
+                {preview ? (
+                  <div style={styles.previewBox}>
+                    <img src={preview} alt="Aperçu" style={styles.previewImg} />
+                    <div>
+                      <p style={{ fontSize: 13, color: '#374151', marginBottom: 6 }}>
+                        ✅ {image?.name}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); setImage(null); setPreview(null); }}
+                        style={styles.removeBtn}
+                      >
+                        ✕ Retirer la photo
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={styles.dropHint}>
+                    <span style={{ fontSize: 32, display: 'block', marginBottom: 8 }}>📷</span>
+                    <span style={{ fontSize: 13, color: '#6b7280' }}>
+                      Glissez une photo ici ou <strong style={{ color: '#1B6B3A' }}>cliquez pour parcourir</strong>
+                    </span>
+                    <span style={{ fontSize: 11, color: '#9ca3af', marginTop: 4, display: 'block' }}>
+                      JPG, PNG — l'image améliore la précision du diagnostic
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {erreur && <div style={styles.erreurBox}>⚠️ {erreur}</div>}
+
+              <button type="submit" style={styles.bouton} disabled={loading}>
+                🔍 Lancer le diagnostic
+              </button>
+
+            </form>
+          </div>
+        )}
+
+        {/* ═══ RÉSULTAT ═══ */}
+        {!loading && resultat && (
+          <ResultatDiagnostic
+            resultat={resultat}
+            culture={form.culture}
+            region={form.region}
+            onTelecharger={telechargerPDF}
+            onNouveau={nouveauDiagnostic}
+          />
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════
+// COMPOSANT RÉSULTAT
+// ════════════════════════════════════════════════════════════
+function ResultatDiagnostic({ resultat, culture, region, onTelecharger, onNouveau }) {
+
+  const { diagnostic, traitement, planning, synthese } = resultat;
+
+  // ── CAS ESCALADE ────────────────────────────────────────
+  if (resultat.statut === 'escalade') {
+    return (
+      <div>
+        {/* Bandeau rouge */}
+        <div style={{ ...styles.scoreBandeau, background: '#dc2626' }}>
+          <div>
+            <div style={styles.scoreLabel}>Confiance faible — vérification recommandée</div>
+            <div style={styles.scoreValue}>🔴 {diagnostic.niveau_confiance}</div>
+          </div>
+          <div style={styles.scoreNumber}>{diagnostic.score}%</div>
+        </div>
+
+        {/* Explication */}
+        <div style={styles.card}>
+          <h3 style={{ ...styles.sectionTitre, color: '#dc2626' }}>⚠️ Pourquoi ce résultat ?</h3>
+          <p style={styles.texte}>{resultat.message}</p>
+          <BadgeMethode methode={diagnostic.methode} confiance_rag={diagnostic.confiance_rag} />
+        </div>
+
+        {/* Hypothèse */}
+        <div style={styles.card}>
+          <h3 style={styles.sectionTitre}>🔬 Hypothèse la plus probable</h3>
+          <div style={styles.maladieBox}>{diagnostic.maladie}</div>
+          {diagnostic.nom_scientifique && (
+            <p style={styles.nomScientifique}>🔬 {diagnostic.nom_scientifique}</p>
+          )}
+          {diagnostic.symptomes?.length > 0 && (
+            <>
+              <p style={styles.labelGras}>Symptômes pris en compte :</p>
+              <ul style={styles.liste}>
+                {diagnostic.symptomes.map((s, i) => <li key={i}>• {s}</li>)}
+              </ul>
+            </>
+          )}
+        </div>
+
+        {/* Traitement provisoire */}
+        {traitement?.traitement_immediat && (
+          <div style={styles.card}>
+            <h3 style={styles.sectionTitre}>💊 En attendant l'avis de l'IRAD</h3>
+            <div style={styles.urgentBox}>
+              🚨 <strong>Action de précaution :</strong> {traitement.traitement_immediat}
+            </div>
+            {traitement.alternative_bio && (
+              <div style={styles.bioBox}>
+                🌿 <strong>Option plus sûre (bio) :</strong> {traitement.alternative_bio}
               </div>
             )}
           </div>
         )}
 
+        {/* Contact IRAD */}
+        <div style={styles.card}>
+          <h3 style={{ ...styles.sectionTitre, color: '#dc2626' }}>📞 Contactez un agronome IRAD</h3>
+          <p style={styles.texte}>☎️ IRAD Cameroun : <strong>+237 222 23 35 26</strong></p>
+          <p style={styles.texte}>
+            Mentionnez le score de confiance ({diagnostic.score}%) pour que l'agronome
+            comprenne qu'il s'agit d'un cas nécessitant vérification.
+          </p>
+        </div>
+
+        {synthese && !synthese.startsWith('Erreur') && (
+          <div style={styles.card}>
+            <h3 style={styles.sectionTitre}>📄 Résumé</h3>
+            <div style={styles.synthese}>{synthese}</div>
+          </div>
+        )}
+
+        <div style={styles.disclaimer}>{resultat.disclaimer}</div>
+        <ActionsButtons
+          consultationId={resultat.consultation_id}
+          onTelecharger={onTelecharger}
+          onNouveau={onNouveau}
+        />
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-// ── Composant vide ─────────────────────────────────────────
-function Vide({ texte = 'Aucune donnée disponible.' }) {
+  // ── CAS SUCCÈS ──────────────────────────────────────────
+  const couleurNiveau = { 'ÉLEVÉ': '#16a34a', 'MOYEN': '#d97706', 'FAIBLE': '#dc2626' };
+  const niveau = Object.keys(couleurNiveau).find(k => diagnostic.niveau_confiance?.includes(k)) || 'FAIBLE';
+
   return (
-    <div style={{ textAlign: 'center', padding: '24px 0', color: C.muted, fontSize: 12 }}>
-      <div style={{ fontSize: 24, marginBottom: 8 }}>🌱</div>
-      {texte}
+    <div>
+
+      {/* BANDEAU SCORE */}
+      <div style={{ ...styles.scoreBandeau, background: couleurNiveau[niveau] }}>
+        <div>
+          <div style={styles.scoreLabel}>Confiance du diagnostic</div>
+          <div style={styles.scoreValue}>{diagnostic.emoji} {diagnostic.niveau_confiance}</div>
+          <div style={{ ...styles.scoreLabel, marginTop: 4, opacity: 0.85 }}>
+            {culture} • {region}
+          </div>
+        </div>
+        <div style={styles.scoreNumber}>{diagnostic.score}%</div>
+      </div>
+
+      {/* DIAGNOSTIC */}
+      <div style={styles.card}>
+        <h3 style={styles.sectionTitre}>🔬 Diagnostic</h3>
+
+        <div style={styles.maladieBox}>{diagnostic.maladie}</div>
+
+        {diagnostic.nom_scientifique && (
+          <p style={styles.nomScientifique}>
+            🔬 <em>{diagnostic.nom_scientifique}</em>
+          </p>
+        )}
+
+        <p style={styles.texte}>{diagnostic.explication}</p>
+
+        {/* Badges source + méthode + cohérence */}
+        <div style={styles.badgesRow}>
+          <BadgeMethode methode={diagnostic.methode} confiance_rag={diagnostic.confiance_rag} />
+          {diagnostic.coherence === true && (
+            <span style={styles.badgeCoherence}>
+              ✓ Image & texte concordants (+{diagnostic.bonus_coherence} pts)
+            </span>
+          )}
+          {diagnostic.coherence === false && (
+            <span style={styles.badgeIncoherence}>
+              ⚠ Image & texte divergents
+            </span>
+          )}
+        </div>
+
+        {diagnostic.observations_image && (
+          <div style={styles.observationBox}>
+            👁️ <strong>Observation visuelle :</strong> {diagnostic.observations_image}
+          </div>
+        )}
+
+        {diagnostic.symptomes?.length > 0 && (
+          <>
+            <p style={styles.labelGras}>Symptômes identifiés :</p>
+            <ul style={styles.liste}>
+              {diagnostic.symptomes.map((s, i) => <li key={i}>✓ {s}</li>)}
+            </ul>
+          </>
+        )}
+
+        <div style={styles.sourceBadge}>📚 {diagnostic.source}</div>
+      </div>
+
+      {/* TRAITEMENT */}
+      <div style={styles.card}>
+        <h3 style={styles.sectionTitre}>💊 Plan de traitement</h3>
+
+        <div style={styles.urgentBox}>
+          🚨 <strong>Action immédiate :</strong> {traitement.traitement_immediat}
+        </div>
+
+        {traitement.traitement_principal && (
+          <div style={styles.traitementBox}>
+            <div style={styles.produitNom}>💊 {traitement.traitement_principal.produit}</div>
+            <p style={styles.texte}><strong>Dosage :</strong> {traitement.traitement_principal.dosage}</p>
+            <p style={styles.texte}><strong>Application :</strong> {traitement.traitement_principal.mode_emploi}</p>
+            <p style={styles.texte}>
+              <strong>📍 Disponible à :</strong> {traitement.traitement_principal.disponibilite}
+            </p>
+          </div>
+        )}
+
+        {traitement.alternative_bio && (
+          <div style={styles.bioBox}>
+            🌿 <strong>Alternative bio :</strong> {traitement.alternative_bio}
+          </div>
+        )}
+
+        {traitement.precautions?.length > 0 && (
+          <>
+            <p style={styles.labelGras}>⚠️ Précautions :</p>
+            <ul style={styles.liste}>
+              {traitement.precautions.map((p, i) => <li key={i}>{p}</li>)}
+            </ul>
+          </>
+        )}
+
+        {traitement.suivi && (
+          <div style={styles.suiviBox}>
+            🔍 <strong>Suivi après traitement :</strong> {traitement.suivi}
+          </div>
+        )}
+      </div>
+
+      {/* PLANNING 4 SEMAINES */}
+      <div style={styles.card}>
+        <h3 style={styles.sectionTitre}>📅 Calendrier — 4 semaines</h3>
+        <div style={styles.planningGrid}>
+          {['semaine_1', 'semaine_2', 'semaine_3', 'semaine_4'].map((key, i) => {
+            const s       = planning[key];
+            const couleurs = ['#dc2626', '#2563eb', '#2E7D52', '#059669'];
+            if (!s) return null;
+            return (
+              <div key={key} style={styles.semaineCard}>
+                <div style={{ ...styles.semaineHeader, background: couleurs[i] }}>
+                  Sem. {i + 1} — {s.priorite?.toUpperCase()}
+                </div>
+                <div style={styles.semaineBody}>
+                  <ul style={styles.liste}>
+                    {s.actions?.map((a, j) => <li key={j}>→ {a}</li>)}
+                  </ul>
+                  <p style={styles.conseil}>💡 {s.conseil}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {planning.alerte_saisonniere && (
+          <div style={styles.alerteBox}>
+            🌦️ <strong>Alerte saisonnière :</strong> {planning.alerte_saisonniere}
+          </div>
+        )}
+      </div>
+
+      {/* SYNTHÈSE */}
+      {synthese && !synthese.startsWith('Erreur') && (
+        <div style={styles.card}>
+          <h3 style={styles.sectionTitre}>📄 Synthèse agronome</h3>
+          <div style={styles.synthese}>{synthese}</div>
+        </div>
+      )}
+
+      <div style={styles.disclaimer}>{resultat.disclaimer}</div>
+
+      <ActionsButtons
+        consultationId={resultat.consultation_id}
+        onTelecharger={onTelecharger}
+        onNouveau={onNouveau}
+      />
     </div>
   );
 }
 
-// ── Styles ─────────────────────────────────────────────────
-const S = {
+
+// ════════════════════════════════════════════════════════════
+// SOUS-COMPOSANTS
+// ════════════════════════════════════════════════════════════
+
+/** Badge indiquant la méthode de diagnostic et la source (RAG ou IA générale) */
+function BadgeMethode({ methode, confiance_rag }) {
+  const labelMethode = {
+    'image + texte':  '📷+📝 Image & description',
+    'texte uniquement': '📝 Description texte',
+    'image uniquement': '📷 Image seule',
+    'aucune': '❌ Aucune analyse',
+  }[methode] || methode;
+
+  return (
+    <div style={styles.badgesRow}>
+      <span style={styles.badgeMethode}>{labelMethode}</span>
+      <span style={confiance_rag ? styles.badgeRAGok : styles.badgeRAGhors}>
+        {confiance_rag ? '✓ Validé base IRAD' : '⟳ Connaissances générales IA'}
+      </span>
+    </div>
+  );
+}
+
+/** Boutons d'action PDF + Nouveau diagnostic */
+function ActionsButtons({ consultationId, onTelecharger, onNouveau }) {
+  return (
+    <div style={styles.actions}>
+      {consultationId && (
+        <button onClick={onTelecharger} style={styles.boutonPrimaire}>
+          📄 Télécharger rapport PDF
+        </button>
+      )}
+      <button onClick={onNouveau} style={styles.boutonSecondaire}>
+        🔍 Nouveau diagnostic
+      </button>
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════
+// STYLES
+// ════════════════════════════════════════════════════════════
+const styles = {
+  page:      { minHeight: '100vh', background: '#f0fdf4', fontFamily: 'Arial, sans-serif' },
+  container: { maxWidth: 720, margin: '0 auto', padding: '24px 16px' },
+
+  // ── Formulaire ──
   card: {
-    background: C.white,
-    borderRadius: 14,
-    padding: '20px 22px',
-    marginBottom: 16,
-    boxShadow: '0 1px 3px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.03)',
+    background: '#fff', borderRadius: 12, padding: 24,
+    marginBottom: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
   },
-  cardHeader: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16,
+  titre:     { fontSize: 20, color: '#1B6B3A', marginBottom: 4, fontWeight: 700 },
+  sousTitre: { fontSize: 13, color: '#6b7280', marginBottom: 20, lineHeight: 1.6 },
+  row:       { display: 'flex', gap: 12 },
+  label:     { display: 'block', fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 6, marginTop: 14 },
+  input:     { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14, boxSizing: 'border-box' },
+  textarea:  { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' },
+
+  dropZone: {
+    marginTop: 8, border: '2px dashed', borderRadius: 10, padding: 20,
+    cursor: 'pointer', transition: 'all 0.2s', textAlign: 'center',
   },
-  cardTitre: {
-    fontSize: 14, fontWeight: 700, color: C.forest,
+  dropHint:  { padding: '10px 0' },
+  previewBox: { display: 'flex', alignItems: 'center', gap: 16, textAlign: 'left' },
+  previewImg: { width: 90, height: 90, objectFit: 'cover', borderRadius: 8, border: '2px solid #e2e8f0', flexShrink: 0 },
+  removeBtn:  { background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 12 },
+  erreurBox:  { marginTop: 12, padding: '10px 12px', background: '#fef2f2', color: '#dc2626', borderRadius: 8, fontSize: 13 },
+  bouton:     { width: '100%', marginTop: 20, padding: '14px', background: '#1B6B3A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 15, fontWeight: 700, cursor: 'pointer' },
+
+  // ── Loader ──
+  loaderCard: {
+    background: '#fff', borderRadius: 12, padding: 32, marginBottom: 16,
+    boxShadow: '0 2px 8px rgba(0,0,0,0.05)', textAlign: 'center',
   },
-  th: {
-    textAlign: 'left', padding: '10px 12px',
-    color: C.muted, fontWeight: 700, fontSize: 10,
-    textTransform: 'uppercase', letterSpacing: '0.06em',
-    borderBottom: `2px solid ${C.border}`,
-    whiteSpace: 'nowrap',
-  },
-  td: {
-    padding: '10px 12px', borderBottom: `1px solid ${C.cream}`,
-    verticalAlign: 'middle',
-  },
+  loaderSpinner:   { fontSize: 40, marginBottom: 12, animation: 'pulse 1.5s infinite' },
+  loaderTitre:     { fontSize: 18, color: '#1B6B3A', fontWeight: 700, marginBottom: 4 },
+  loaderSousTitre: { fontSize: 13, color: '#6b7280', marginBottom: 24 },
+  etapesContainer: { textAlign: 'left', margin: '0 auto 20px', maxWidth: 360 },
+  etapeLigne:      { fontSize: 12, padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8, transition: 'all 0.3s' },
+  etapePuce:       { width: 16, textAlign: 'center', flexShrink: 0 },
+  loaderBarre:     { height: 6, background: '#e5e7eb', borderRadius: 3, overflow: 'hidden', margin: '0 auto', maxWidth: 360 },
+  loaderBarreInterne: { height: '100%', background: '#1B6B3A', borderRadius: 3, transition: 'width 0.8s ease' },
+
+  // ── Résultat — général ──
+  scoreBandeau: { borderRadius: 12, padding: '18px 24px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#fff' },
+  scoreLabel:   { fontSize: 12, opacity: 0.9 },
+  scoreValue:   { fontSize: 16, fontWeight: 700, marginTop: 4 },
+  scoreNumber:  { fontSize: 40, fontWeight: 900 },
+
+  sectionTitre:    { fontSize: 16, color: '#1B6B3A', marginBottom: 12, fontWeight: 700 },
+  maladieBox:      { fontSize: 18, fontWeight: 700, color: '#1a1a1a', marginBottom: 6, padding: '10px 14px', background: '#f0fdf4', borderRadius: 8, borderLeft: '4px solid #1B6B3A' },
+  nomScientifique: { fontSize: 13, color: '#6b7280', fontStyle: 'italic', marginBottom: 8 },
+  texte:           { fontSize: 13, color: '#374151', lineHeight: 1.6, marginBottom: 8 },
+  labelGras:       { fontSize: 13, fontWeight: 700, color: '#1B6B3A', marginTop: 12, marginBottom: 6 },
+  liste:           { listStyle: 'none', padding: 0, margin: 0, fontSize: 13, color: '#374151', lineHeight: 2 },
+  sourceBadge:     { marginTop: 12, display: 'inline-block', background: '#e0f2fe', color: '#0369a1', padding: '4px 12px', borderRadius: 20, fontSize: 11 },
+
+  badgesRow:       { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  badgeMethode:    { fontSize: 11, background: '#f3f4f6', color: '#374151', padding: '3px 10px', borderRadius: 20, border: '1px solid #e5e7eb' },
+  badgeRAGok:      { fontSize: 11, background: '#dcfce7', color: '#15803d', padding: '3px 10px', borderRadius: 20, border: '1px solid #bbf7d0' },
+  badgeRAGhors:    { fontSize: 11, background: '#fef9c3', color: '#854d0e', padding: '3px 10px', borderRadius: 20, border: '1px solid #fef08a' },
+  badgeCoherence:  { fontSize: 11, background: '#dcfce7', color: '#15803d', padding: '3px 10px', borderRadius: 20 },
+  badgeIncoherence:{ fontSize: 11, background: '#fff7ed', color: '#c2410c', padding: '3px 10px', borderRadius: 20 },
+
+  observationBox: { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6, padding: '10px 14px', fontSize: 12, color: '#475569', marginBottom: 10, fontStyle: 'italic' },
+
+  // ── Traitement ──
+  urgentBox:   { background: '#fef2f2', borderLeft: '4px solid #dc2626', borderRadius: 6, padding: '10px 14px', fontSize: 13, color: '#7f1d1d', marginBottom: 12 },
+  traitementBox: { background: '#fefce8', borderLeft: '4px solid #f59e0b', borderRadius: 6, padding: '12px 14px', marginBottom: 12 },
+  produitNom:  { fontSize: 15, fontWeight: 700, color: '#92400e', marginBottom: 6 },
+  bioBox:      { background: '#f0fdf4', borderLeft: '4px solid #22c55e', borderRadius: 6, padding: '10px 14px', fontSize: 13, color: '#14532d', marginBottom: 12 },
+  suiviBox:    { background: '#eff6ff', borderLeft: '4px solid #3b82f6', borderRadius: 6, padding: '10px 14px', fontSize: 13, color: '#1e3a8a', marginTop: 8 },
+
+  // ── Planning ──
+  planningGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 },
+  semaineCard:  { border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' },
+  semaineHeader: { padding: '8px 12px', color: '#fff', fontSize: 11, fontWeight: 700 },
+  semaineBody:   { padding: '10px 12px', background: '#fafafa' },
+  conseil:       { marginTop: 8, fontSize: 11, color: '#6b7280', fontStyle: 'italic' },
+  alerteBox:     { marginTop: 12, background: '#fffbeb', borderLeft: '4px solid #f59e0b', borderRadius: 6, padding: '10px 14px', fontSize: 13, color: '#78350f' },
+
+  // ── Synthèse ──
+  synthese:    { fontSize: 13, color: '#374151', lineHeight: 1.9, whiteSpace: 'pre-wrap' },
+  disclaimer:  { fontSize: 11, color: '#6b7280', fontStyle: 'italic', padding: '12px 16px', background: '#f8fafc', borderRadius: 8, marginBottom: 16 },
+
+  // ── Actions ──
+  actions:         { display: 'flex', gap: 12, marginBottom: 40 },
+  boutonPrimaire:  { flex: 1, padding: '13px', background: '#1B6B3A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer' },
+  boutonSecondaire: { flex: 1, padding: '13px', background: '#fff', color: '#1B6B3A', border: '2px solid #1B6B3A', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer' },
 };
